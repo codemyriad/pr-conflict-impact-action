@@ -111,7 +111,7 @@ class API:
 
     def call(self, path, method='GET', data=None):
         request = urllib.request.Request(
-            f'{self.root}/repos/{self.repo}/{path}',
+            f'{self.root}/repos/{self.repo}' + (f'/{path}' if path else ''),
             data=json.dumps(data).encode() if data is not None else None,
             method=method,
             headers={'Authorization': f'Bearer {self.token}',

@@ -10,6 +10,9 @@ inputs:
   dry-run:
     description: Compute results without changing comments
     default: 'false'
+  retarget-children:
+    description: Simulate child PR retargeting when automatic branch deletion is enabled
+    default: 'false'
 runs:
   using: composite
   steps:
@@ -18,5 +21,6 @@ runs:
         IMPACT_TOKEN: ${{ inputs.token }}
         IMPACT_MERGE_METHOD: ${{ inputs.merge-method }}
         IMPACT_DRY_RUN: ${{ inputs.dry-run }}
+        IMPACT_RETARGET_CHILDREN: ${{ inputs.retarget-children }}
         IMPACT_ACTION_PATH: ${{ github.action_path }}
       run: python3 "$IMPACT_ACTION_PATH/impact.py"

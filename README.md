@@ -56,6 +56,7 @@ comment until the next queued run. Do not run competing copies of this action.
 | `token` | `github.token` | Contents read and pull-requests write access to the caller repository |
 | `merge-method` | `merge` | `merge` or `squash`; must be enabled in the repository |
 | `dry-run` | `false` | Log the findings as JSON without creating, editing, or deleting comments |
+| `retarget-children` | `false` | Set `true` if automatic branch deletion is enabled, to simulate child PR retargeting |
 
 Use the default installation token. For a custom token, set the step environment
 `IMPACT_COMMENT_AUTHOR` to its exact GitHub login so only its comments are managed.
@@ -70,9 +71,11 @@ For every candidate A and other PR B targeting the same base:
 3. Merge B into that synthetic commit. Warn only if this merge conflicts.
 
 If A itself conflicts, its impact cannot be predicted; its warning is cleared.
-If automatic branch deletion is enabled, also check same-repository child PRs
+With `retarget-children: 'true'`, also check same-repository child PRs
 that would be retargeted from A's branch to A's base. With deletion disabled,
 children continue to target their existing base and are not treated as retargeted.
+This input is explicit because GitHub's minimally scoped token cannot read the
+administrative branch-deletion setting.
 
 Git's `merge-tree --write-tree` handles renames, add/add, modify/delete and other
 structural conflicts. A conflict is exit status 1; other errors abort the scan.

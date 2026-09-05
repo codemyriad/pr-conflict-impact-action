@@ -156,7 +156,8 @@ def main():
     token = os.environ['IMPACT_TOKEN']
     api = API(repo, token)
     metadata = api.call('')
-    if not metadata[f'allow_{"merge_commit" if method == "merge" else "squash_merge"}']:
+    # GitHub omits administrative settings from minimal installation tokens.
+    if metadata.get(f'allow_{"merge_commit" if method == "merge" else "squash_merge"}') is False:
         raise ValueError(f'{method} merging is disabled in this repository')
     event_path = os.environ.get('GITHUB_EVENT_PATH')
     event = json.loads(Path(event_path).read_text()) if event_path else {}
@@ -171,7 +172,8 @@ def main():
             # Catch changed/deleted refs before merge failures can be misclassified.
             if fingerprint(pulls) != fingerprint(api.snapshot()):
                 continue
-            findings = analyze(git, pulls, method, metadata['delete_branch_on_merge'])
+            findings = analyze(git, pulls, method,
+                               os.environ.get('IMPACT_RETARGET_CHILDREN', 'false').lower() == 'true')
         if fingerprint(pulls) != fingerprint(api.snapshot()):
             continue
         if dry_run:

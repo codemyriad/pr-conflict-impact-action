@@ -85,9 +85,7 @@ def body_for(numbers, method):
         return None
     return (MARKER + '\n'
             f'Merging this PR using **{method}** would make these currently mergeable PRs conflict:\n\n'
-            + '\n'.join(f'- #{number}' for number in sorted(numbers))
-            + '\n\nPRs already conflicting with their base branch are omitted.\n'
-            'This checks Git merge conflicts, not build or test compatibility.')
+            + '\n'.join(f'- #{number}' for number in sorted(numbers)))
 
 
 def reconcile(api, number, body, author):

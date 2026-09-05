@@ -1,0 +1,22 @@
+name: PR conflict impact
+description: Warn only when merging a PR would make a currently clean PR conflict.
+inputs:
+  token:
+    description: Token with contents read and pull-requests write permissions
+    default: ${{ github.token }}
+  merge-method:
+    description: Merge method to simulate (merge or squash)
+    default: merge
+  dry-run:
+    description: Compute results without changing comments
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        IMPACT_TOKEN: ${{ inputs.token }}
+        IMPACT_MERGE_METHOD: ${{ inputs.merge-method }}
+        IMPACT_DRY_RUN: ${{ inputs.dry-run }}
+        IMPACT_ACTION_PATH: ${{ github.action_path }}
+      run: python3 "$IMPACT_ACTION_PATH/impact.py"

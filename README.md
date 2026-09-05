@@ -32,6 +32,7 @@ concurrency:
 jobs:
   impact:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: codemyriad/pr-conflict-impact-action@v1 # Prefer a full commit SHA.
         with:
@@ -109,3 +110,10 @@ python3 -m unittest discover -s tests -v
 Tests create real Git object histories and cover clean/new/pre-existing conflicts,
 modify/delete, base isolation, squash topology, child retargeting, Git errors,
 and comment creation, in-place update, no-op, deletion and ownership.
+
+`tests/e2e.py` is an opt-in live test harness. It is restricted to the disposable
+`codemyriad/pr-conflict-impact-test` repository. It creates four PRs and verifies
+creation, update with the same comment ID, unchanged timestamps on repeated runs,
+and deletion after resolution. One PR has a pre-existing conflict throughout.
+
+The action is MIT licensed.

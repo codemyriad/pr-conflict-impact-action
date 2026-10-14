@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 import subprocess
 import tempfile
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -101,24 +103,66 @@ def reconcile(api, number, body, author):
         api.call(f'issues/comments/{comment["id"]}', 'DELETE')
 
 
+# Waits between attempts of one API call. GitHub answers transient trouble
+# (rate limits, abuse detection, outages) with 403, 429 or 5xx.
+RETRY_DELAYS = (2, 5, 15, 30, 60)
+MAX_RETRY_WAIT = 300
+
+
+def retry_wait(error, attempt, method, now):
+    """Seconds to wait before retrying a failed call, or None to give up."""
+    if attempt >= len(RETRY_DELAYS):
+        return None
+    if not isinstance(error, urllib.error.HTTPError):
+        # Network errors: a timeout or reset says nothing about the request.
+        return RETRY_DELAYS[attempt] if isinstance(error, (urllib.error.URLError, TimeoutError)) else None
+    headers = error.headers or {}
+    limited = headers.get('x-ratelimit-remaining') == '0'
+    if error.code == 429 or (error.code == 403 and (headers.get('retry-after') or limited)):
+        if headers.get('retry-after', '').isdigit():
+            return min(int(headers['retry-after']), MAX_RETRY_WAIT)
+        if limited and headers.get('x-ratelimit-reset', '').isdigit():
+            return min(max(int(headers['x-ratelimit-reset']) - int(now), 0) + 1, MAX_RETRY_WAIT)
+        return RETRY_DELAYS[attempt]
+    if error.code >= 500:
+        return RETRY_DELAYS[attempt]
+    # GitHub sometimes answers a read with a bare 403 for a few seconds. A
+    # read is safe to repeat; a write that was refused is not retried.
+    if error.code == 403 and method == 'GET':
+        return RETRY_DELAYS[attempt]
+    return None
+
+
 class API:
-    def __init__(self, repo, token):
+    def __init__(self, repo, token, urlopen=urllib.request.urlopen, sleep=time.sleep, clock=time.time):
         self.root = os.environ.get('GITHUB_API_URL', 'https://api.github.com')
         self.repo = repo
         self.token = token
+        self.urlopen = urlopen
+        self.sleep = sleep
+        self.clock = clock
 
     def call(self, path, method='GET', data=None):
-        request = urllib.request.Request(
-            f'{self.root}/repos/{self.repo}' + (f'/{path}' if path else ''),
-            data=json.dumps(data).encode() if data is not None else None,
-            method=method,
-            headers={'Authorization': f'Bearer {self.token}',
-                     'Accept': 'application/vnd.github+json',
-                     'Content-Type': 'application/json',
-                     'User-Agent': 'pr-conflict-impact-action'})
-        with urllib.request.urlopen(request, timeout=60) as response:
-            content = response.read()
-            return json.loads(content) if content else None
+        url = f'{self.root}/repos/{self.repo}' + (f'/{path}' if path else '')
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            request = urllib.request.Request(
+                url,
+                data=json.dumps(data).encode() if data is not None else None,
+                method=method,
+                headers={'Authorization': f'Bearer {self.token}',
+                         'Accept': 'application/vnd.github+json',
+                         'Content-Type': 'application/json',
+                         'User-Agent': 'pr-conflict-impact-action'})
+            try:
+                with self.urlopen(request, timeout=60) as response:
+                    content = response.read()
+                    return json.loads(content) if content else None
+            except (urllib.error.URLError, TimeoutError) as error:
+                wait = retry_wait(error, attempt, method, self.clock())
+                if wait is None:
+                    raise RuntimeError(f'{method} {url} failed: {describe(error)}') from error
+                print(f'{method} {url}: {describe(error)}; retrying in {wait} s', flush=True)
+                self.sleep(wait)
 
     def pages(self, path):
         for page in range(1, 10001):
@@ -140,6 +184,24 @@ class API:
         return pulls
 
 
+def describe(error):
+    """An error with what GitHub said, so a failed run can be diagnosed."""
+    if not isinstance(error, urllib.error.HTTPError):
+        return str(getattr(error, 'reason', error))
+    headers = error.headers or {}
+    detail = [f'HTTP {error.code}']
+    for name in ('retry-after', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'x-github-request-id'):
+        if headers.get(name):
+            detail.append(f'{name}={headers[name]}')
+    try:
+        body = error.read().decode(errors='replace').strip()
+    except Exception:
+        body = ''
+    if body:
+        detail.append(body[:500])
+    return ' '.join(detail)
+
+
 def fingerprint(pulls):
     return sorted((p['number'], p['base']['ref'], p['base']['sha'],
                    p['head']['sha'], p['head']['ref']) for p in pulls)
@@ -159,6 +221,7 @@ def main():
         raise ValueError(f'{method} merging is disabled in this repository')
     event_path = os.environ.get('GITHUB_EVENT_PATH')
     event = json.loads(Path(event_path).read_text()) if event_path else {}
+    fetch_error = None
     for attempt in range(3):
         pulls = api.snapshot()
         with tempfile.TemporaryDirectory(prefix='pr-conflict-impact-') as path:
@@ -166,7 +229,15 @@ def main():
             refs = {f'+refs/heads/{p["base"]["ref"]}:refs/impact/base/{p["base"]["ref"]}' for p in pulls}
             refs.update(f'+refs/pull/{p["number"]}/head:refs/impact/pr/{p["number"]}' for p in pulls)
             if refs:
-                git.run('fetch', '--no-tags', metadata['clone_url'], *sorted(refs))
+                # A PR closed since the snapshot, or a network hiccup, fails
+                # the fetch; the next attempt starts from a fresh snapshot.
+                try:
+                    git.run('fetch', '--no-tags', metadata['clone_url'], *sorted(refs))
+                except RuntimeError as error:
+                    fetch_error = error
+                    print(f'Fetch failed, retrying from a fresh snapshot: {error}', flush=True)
+                    time.sleep(RETRY_DELAYS[attempt])
+                    continue
             # Catch changed/deleted refs before merge failures can be misclassified.
             if fingerprint(pulls) != fingerprint(api.snapshot()):
                 continue
@@ -185,7 +256,8 @@ def main():
         if closed.get('state') == 'closed':
             reconcile(api, closed['number'], None, author)
         return
-    raise RuntimeError('PRs or base branches kept changing; no comments updated. Rerun the workflow.')
+    raise RuntimeError('PRs or base branches kept changing; no comments updated. Rerun the workflow.'
+                       + (f' Last fetch error: {fetch_error}' if fetch_error else ''))
 
 
 if __name__ == '__main__':

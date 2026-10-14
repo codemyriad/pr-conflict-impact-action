@@ -7,7 +7,11 @@ There is at most one marked bot comment per PR. Changed findings update that
 comment in place; identical findings cause no write. When the findings clear,
 the comment is deleted. No clean-state comment or Actions step summary is emitted.
 The Actions run itself is still visible. The check is advisory and succeeds when
-conflicts are found; infrastructure errors fail the run and preserve old comments.
+conflicts are found. Transient GitHub trouble is retried: rate limits wait as long
+as GitHub asks (up to five minutes), and 5xx answers, network errors and a brief
+403 on a read back off for up to about two minutes. A failed fetch restarts from a
+fresh snapshot. Errors that persist fail the run with GitHub's reply in the log,
+and preserve old comments.
 
 ## Install
 
@@ -109,7 +113,8 @@ python3 -m unittest discover -s tests -v
 
 Tests create real Git object histories and cover clean/new/pre-existing conflicts,
 modify/delete, base isolation, squash topology, child retargeting, Git errors,
-and comment creation, in-place update, no-op, deletion and ownership.
+comment creation, in-place update, no-op, deletion and ownership, and which API
+errors are retried and how long each waits.
 
 `tests/e2e.py` is an opt-in live test harness. It is restricted to the disposable
 `codemyriad/pr-conflict-impact-test` repository. It creates four PRs and verifies
